@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --wps-brand: #E64C3D;
+  --wps-brand-dark: #C73E30;
+  --wps-bg: #F5F6F8;
+  --wps-border: #E5E7EB;
+}
+
+html, body { height: 100%; }
+body {
+  background: var(--wps-bg);
+  color: #1F2937;
+  font-feature-settings: 'tnum';
+}
+
+/* thin scrollbars — closer to a desktop product than the default */
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+*::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* Reveal-on-hover card actions, WPS style */
+.file-card .card-actions { opacity: 0; transition: opacity .12s ease; }
+.file-card:hover .card-actions { opacity: 1; }
+
+/* Editor / preview shell */
+.editor-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 480px;
+  background: #fff;
+}
+.editor-shell .jitword-container { width: 100%; height: 100%; }
+
+/* Marketing contact modal animations */
+@keyframes jw-fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes jw-popIn {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}

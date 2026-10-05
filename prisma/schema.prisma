@@ -1,0 +1,260 @@
+// JitDrive data model.
+//
+// Provider is intentionally `sqlite` for a zero-ops local demo, but every
+// relation is modelled with join tables (no array columns) so migrating to
+// Postgres later is a one-line change of `provider` + `url` here plus
+// `prisma migrate` — no data-model rewrite. See docs/ARCHITECTURE.md §仓储层.
+//
+// Timestamps are stored as epoch-millisecond integers to stay identical to the
+// previous JSON store's `createdAt/updatedAt/...` numbers, so both the app DTO
+// (lib/types.FileRecord) and SQLite/Postgres agree without Date juggling.
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id             String   @id @default(cuid())
+  email          String   @unique
+  name           String
+  passwordHash   String
+  color          String   @default("#64748b")
+  createdAt      BigInt
+  owns           File[]   @relation("FileOwner")
+  folders        Folder[] @relation("FolderOwner")
+  shares         FileShare[]
+  usedInvite     InviteCode?  @relation("InviteUsed")
+  createdInvites InviteCode[] @relation("InviteCreated")
+  shareLinkInvites ShareLinkUser[]
+}
+
+// Directory container. A self-referencing forest per owner: parentId=null ⇒ root.
+// v0.4 introduces folders; only File lives inside them (no mixed items). Soft
+// delete on a Folder cascades logically by tagging all descendants with
+// deletedViaParentId = <top folder id> so restore/purge can find the batch —
+// see docs/ARCHITECTURE.md §4.14 / §4.18.
+model Folder {
+  id                  String    @id
+  name                String
+  ownerId             String
+  owner               User      @relation("FolderOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  parent              Folder?   @relation("FolderTree", fields: [parentId], references: [id], onDelete: Restrict)
+  parentId            String?
+  children            Folder[]  @relation("FolderTree")
+  files               File[]    @relation("FileParent")
+  shareLinks          ShareLink[]  // v0.5.2 · folder-scoped public links (XOR with File.shareLinks)
+  createdAt           BigInt
+  updatedAt           BigInt
+  deleted             Boolean   @default(false)
+  deletedAt           BigInt?
+  // Set when this folder was soft-deleted as part of an ancestor's cascade.
+  // Restore/purge on the ancestor looks up by this field to catch all descendants.
+  deletedViaParentId  String?
+  status              String    @default("ready")
+
+  @@index([ownerId, parentId, deleted])
+  @@index([deletedViaParentId])
+}
+
+model File {
+  id              String    @id
+  name            String
+  // Nullable in v0.4: only JitWord-native files (currently docx) have a docId.
+  // Other types (pdf / xlsx / image / audio / video / archive / other) live as
+  // plain static files served through /api/files/[id]/raw.
+  docId           String?
+  // Lower-case extension without leading dot, e.g. "docx", "pdf", "png".
+  // FileKind is derived from this on read (lib/filetypes.kindOf), NOT stored —
+  // so if the whitelist changes, existing rows automatically reclassify to
+  // `other` and the UI degrades to "download-only" without data migration.
+  extension       String    @default("docx")
+  size            Int
+  mime            String
+  // Directory container. null ⇒ root. FK on delete Restrict means the folder
+  // route must move / soft-delete children before removing a Folder row (see
+  // lib/store.ts::softDeleteFolder which uses cascade tagging instead of
+  // actually deleting folder rows until purge).
+  parent          Folder?   @relation("FileParent", fields: [parentId], references: [id], onDelete: Restrict)
+  parentId        String?
+  ownerId         String
+  owner           User      @relation("FileOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  ownerName       String
+  // JitWord binds each document to the (tenantKey, providerKey, externalSubject)
+  // that created it. After the v0.3 account migration, our app-level ownerId is a
+  // real user cuid, but the underlying JitWord docs are still bound to whichever
+  // subject originally called /embed/documents (persona id for legacy, cuid for
+  // new). The ticket endpoint must replay that creator verbatim or JitWord 403s.
+  jwSubject       String?
+  createdAt       BigInt
+  updatedAt       BigInt
+  lastEditedAt    BigInt?
+  deleted         Boolean   @default(false)
+  deletedAt       BigInt?
+  // Populated when this file was soft-deleted as part of a folder cascade.
+  deletedViaParentId String?
+  lastAccessedAt  BigInt?
+  accessCount     Int      @default(0)
+  originalPath    String?
+  pendingHtmlPath String?
+  pendingImport   Boolean  @default(true)
+  status          String   @default("ready")
+  // 'docx' kept for backward compatibility with v0.3.2 consumers; new code
+  // should read `extension` + derive FileKind via lib/filetypes.kindOf().
+  category        String   @default("docx")
+  // v0.7 · AI P0 · sha256 hex (64 chars) of the stored blob. Populated
+  // synchronously on upload for both branches (docx + generic blob); legacy
+  // rows stay null until the AI Smart page's backfill scan catches them.
+  // Used by duplicate detection (`GROUP BY contentHash HAVING count>1`) and
+  // later by embedding / insight caching to skip re-processing unchanged files.
+  contentHash     String?
+  // v0.7 · AI P0 · Heuristic sensitivity label. Values: 'low' | 'medium' | 'high'
+  // (application-level union enforced in lib/smart/sensitive.ts; SQLite has no
+  // first-class enum so we keep it a String for portability). null ⇒ not yet
+  // scanned. v0.7 covers text-family bodies (txt/md/html/csv/json/xml/log) +
+  // filename keyword heuristics for ALL kinds; docx/pdf 正文扫描推到 v0.8
+  // (needs pdf-parse / JitWord export API integration).
+  sensitivity     String?
+  shares          FileShare[]
+  shareLinks      ShareLink[]
+
+  @@index([ownerId, deleted])
+  @@index([ownerId, parentId, deleted])
+  @@index([deleted, lastAccessedAt])
+  @@index([deletedViaParentId])
+  @@index([ownerId, contentHash])
+  @@index([ownerId, sensitivity])
+}
+
+// Many-to-many File<->User "viewer" roster (portable across SQLite/Postgres).
+model FileShare {
+  fileId String
+  userId String
+  file   File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([fileId, userId])
+}
+
+// v0.5 · Public share link. A short opaque `code` (8-char base62) that anyone
+// with the link can open at `/s/[code]` for **read-only** preview — no JitDrive
+// account needed, no email roster. Coexists with FileShare (login-scoped viewer)
+// without interfering: revoking a link doesn't touch the roster and vice versa.
+//
+// Design notes:
+//  - `code` is generated server-side via crypto.randomBytes + base62, unique
+//    with collision-retry. Never client-supplied (blocks enumeration and
+//    social-engineered short codes).
+//  - `passwordHash` is optional scrypt digest (per-row salt baked into the
+//    stored string); empty means "anyone with the link can view".
+//  - `expiresAt` (epoch ms) and `maxViews` are two independent gates; null
+//    means unlimited on that axis. Every successful render of `/s/[code]`
+//    bumps `viewCount` by 1 (raw/ticket streaming does NOT count, otherwise
+//    prefetch and Range chunk fetches would inflate the number).
+//  - `revokedAt` is soft-delete: we keep the row for audit, but every public
+//    endpoint checks it and returns 410 if set. Owner-side list filters it
+//    out by default.
+//  - `allowDownload` (default true) gates whether the viewer can hit
+//    `/api/share/[code]/raw?download=1` (attachment) or only inline preview.
+//  - `createdBy` mirrors owner uid at creation time; kept separate from
+//    `File.ownerId` so future "collaborators can also create links" doesn't
+//    require schema changes.
+//
+// v0.5.2 · Folder-scoped links. A ShareLink now points to EITHER a File OR a
+// Folder — never both, never neither. SQLite doesn't ship a nice CHECK-constraint
+// migration, so the XOR is enforced at the application layer in
+// `lib/share.ts::createShareLink` (throws 400 on both/neither). Downstream code
+// (`authorizePublic`, `/api/share/[code]/raw`, `/api/share/[code]/ticket`) uses
+// a `kind: 'file' | 'folder'` union so the compiler forces every branch to
+// handle both. Folder links recursively cover their whole subtree at view time
+// — no snapshot, dynamic membership; adding a file to the folder instantly
+// puts it behind the same link, and moving a file out instantly removes it.
+model ShareLink {
+  id            String    @id @default(cuid())
+  fileId        String?
+  file          File?     @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  folderId      String?
+  folder        Folder?   @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  code          String    @unique
+  passwordHash  String?
+  expiresAt     BigInt?
+  maxViews      Int?
+  viewCount     Int       @default(0)
+  allowDownload Boolean   @default(true)
+  revokedAt     BigInt?
+  createdBy     String
+  createdAt     BigInt
+  lastViewedAt  BigInt?
+  invitees      ShareLinkUser[]
+  // v0.5.3 · S2 per-visit detail rows (analysis / audit layer). viewCount stays
+  // the fast denormalized gate counter; this is the granular "who/when/where".
+  views         ShareView[]
+
+  @@index([fileId, revokedAt])
+  @@index([folderId, revokedAt])
+}
+
+// v0.5.1 · Invite-only allowlist for ShareLink. When a link has ≥1 row here,
+// `authorizePublic` requires a valid jw_session AND the session userId must be
+// present in this set — otherwise the visitor gets `need-login` (401) or
+// `not-invited` (403). This lets owners distribute a link to named users
+// without running the full FileShare roster (which requires an "accepted"
+// workflow) and without a shared password.
+//
+// Design mirrors FileShare: composite PK (linkId, userId) → idempotent inserts
+// via createMany.skipDuplicates; onDelete Cascade so revoking / purging a
+// link automatically cleans the whitelist.
+model ShareLinkUser {
+  linkId    String
+  link      ShareLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt BigInt
+
+  @@id([linkId, userId])
+  @@index([userId])
+}
+
+// v0.5.3 · S2 Per-visit access log for a ShareLink. One row every time a
+// visitor *successfully views* the content — same gate as `recordView` /
+// `viewCount` (anonymous or allowlisted-logged-in ok-branch on the root
+// `/s/[code]` render; raw/ticket streaming and sub-folder navigation don't
+// count). Kept alongside the denormalized `ShareLink.viewCount`: the counter
+// stays the O(1) gate the hot path reads, while this table is the granular
+// "who / when / from where" layer that powers S3's owner analytics and, later,
+// the S6 audit stream.
+//
+// Privacy: `ip` / `ua` / `referrer` are stored server-side for risk/audit only
+// and are deliberately NOT surfaced in owner UI (see tech/07-risks.md 隐私红线).
+// `userId` is populated for invite-only (logged-in) visitors, null for anonymous.
+model ShareView {
+  id       String    @id @default(cuid())
+  linkId   String
+  link     ShareLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  userId   String?
+  ip       String?
+  ua       String?
+  referrer String?
+  ts       BigInt
+
+  @@index([linkId, ts])
+  @@index([userId])
+}
+
+// Invite codes gate registration. `usedById` unique ⇒ each code redeems once.
+// Seed a default pool (DEMO_INVITE_CODE); logged-in users can mint more.
+model InviteCode {
+  id          String  @id @default(cuid())
+  code        String  @unique
+  createdAt   BigInt
+  createdById String?
+  createdBy   User?   @relation("InviteCreated", fields: [createdById], references: [id])
+  usedById    String? @unique
+  usedBy      User?   @relation("InviteUsed", fields: [usedById], references: [id])
+
+  @@index([createdById])
+}
