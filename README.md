@@ -81,10 +81,7 @@ npm run dev
 
 | 账号 | 姓名 |
 | --- | --- |
-| `alice@jitdrive.dev` | 徐晓溪 |
-| `bob@jitdrive.dev` | 李四 |
-| `carol@jitdrive.dev` | 王五 |
-| `dave@jitdrive.dev` | 赵六 |
+| `alice@jitdrive.dev` | 徐小夕 |
 
 **注册新账号**：主邀请码 `JITDRIVE-DEMO`（不限次、不消耗）；登录后头像菜单可生成一次性邀请码。
 
@@ -162,13 +159,6 @@ Next.js 14 (App Router) ── server components + route handlers 同仓同进�
 | v1.0 | 🔭 愿景 | 智能体与自动化：跨文件问答 RAG · 工作流 DSL · 智能归档 · 会议纪要 · 周报 digest |
 
 详细产品/架构决策见 [`docs/PRD.md`](docs/PRD.md)、[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)、[`docs/PLAN-v0.7.md`](docs/PLAN-v0.7.md)。
-
----
-
-## 📸 截图 · Screenshots
-
-> _（占位）把你的界面截图放到 `docs/images/` 后替换：_ `![drive](docs/images/drive.png)`
-> 建议展示：官网首页 · 云盘首页（卡片 / 目录树双视图） · `/drive/smart` AI 智能面板 · 分享弹窗 · 高保真编辑页
 
 ---
 
@@ -261,10 +251,6 @@ npm run dev            # http://localhost:3000 → アプリは /drive
 ## 🤝 致谢 · Acknowledgments
 
 编辑器与预览能力由 **JitWord** iframe SDK 与 Preview SDK 提供；数据层用 **Prisma**，样式用 **Tailwind CSS**。本项目为集成参考 Demo，密钥为演示用途，请勿用于生产。
-
-## 📄 License · 开源协议
-
-[MIT](#) © JitOffice — 自由使用、修改、分发，保留署名。
 
 <div align="center">
 
